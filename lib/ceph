@@ -63,6 +63,12 @@ CINDER_CEPH_POOL_PGP=${CINDER_CEPH_POOL_PGP:-8}
 CINDER_CEPH_USER=${CINDER_CEPH_USER:-cinder}
 CINDER_CEPH_UUID=${CINDER_CEPH_UUID:-$(uuidgen)}
 
+# Manila
+CEPHFS_POOL_PG=${CEPHFS_POOL_PG:-8}
+CEPHFS_METADATA_POOL=${CEPHFS_CEPH_POOL:-cephfs_metadata}
+CEPHFS_DATA_POOL=${CEPHFS_CEPH_POOL:-cephfs_data}
+MANILA_CEPH_USER=${MANILA_CEPH_USER:-manila}
+
 # Set ``CEPH_REPLICAS`` to configure how many replicas are to be
 # configured for your Ceph cluster. By default we are configuring
 # only one replica since this is way less CPU and memory intensive. If
@@ -142,6 +148,9 @@ function cleanup_ceph_remote {
     if is_service_enabled nova; then
         iniset $NOVA_CONF libvirt rbd_secret_uuid ""
         sudo ceph osd pool delete $NOVA_CEPH_POOL $NOVA_CEPH_POOL --yes-i-really-really-mean-it > /dev/null 2>&1
+    fi
+    if is_service_enabled manila; then
+        sudo ceph auth del client.$MANILA_CEPH_USER
     fi
 }
 
@@ -257,6 +266,18 @@ EOF
             sudo touch ${CEPH_DATA_DIR}/osd/ceph-${OSD_ID}/sysvinit
         fi
     done
+
+    # Create an MDS
+    MDS_ID=a
+    sudo mkdir -p ${CEPH_DATA_DIR}/mds/ceph-${MDS_ID}
+    sudo ceph -c ${CEPH_CONF_FILE} auth get-or-create osd.${MDS_ID} \
+        mon 'allow profile mds ' osd 'allow rw' mds 'allow' | \
+        sudo tee ${CEPH_DATA_DIR}/mds/ceph-${MDS_ID}/keyring
+    if is_ubuntu; then
+        sudo touch ${CEPH_DATA_DIR}/mds/ceph-${MDS_ID}/upstart
+    else
+        sudo touch ${CEPH_DATA_DIR}/mds/ceph-${MDS_ID}/sysvinit
+    fi
 }
 
 function configure_ceph_embedded_glance {
@@ -329,6 +350,28 @@ function configure_ceph_cinder {
         osd "allow class-read object_prefix rbd_children, allow rwx pool=${CINDER_CEPH_POOL}, allow rwx pool=${NOVA_CEPH_POOL},allow rwx pool=${GLANCE_CEPH_POOL}" | \
         sudo tee ${CEPH_CONF_DIR}/ceph.client.${CINDER_CEPH_USER}.keyring
     sudo chown ${STACK_USER}:$(id -g -n $whoami) ${CEPH_CONF_DIR}/ceph.client.${CINDER_CEPH_USER}.keyring
+}
+
+function configure_ceph_manila {
+    sudo ceph -c ${CEPH_CONF_FILE} osd pool create ${CEPHFS_METADATA_POOL} ${CEPHFS_POOL_PG}
+    sudo ceph -c ${CEPH_CONF_FILE} osd pool create ${CEPHFS_DATA_POOL} ${CEPHFS_POOL_PG}
+    sudo ceph -c ${CEPH_CONF_FILE} fs new cephfs ${CEPHFS_METADATA_POOL} ${CEPHFS_DATA_POOL}
+    sudo ceph -c ${CEPH_CONF_FILE} auth get-or-create client.${MANILA_CEPH_USER} \
+        mon "allow *" \
+        osd "allow rw" \
+        mds "allow *" | \
+        sudo tee ${CEPH_CONF_DIR}/ceph.client.${MANILA_CEPH_USER}.keyring
+        sudo chown ${STACK_USER}:$(id -g -n $whoami) ${CEPH_CONF_DIR}/ceph.client.${MANILA_CEPH_USER}.keyring
+
+}
+
+function configure_ceph_embedded_manila {
+    sudo ceph -c ${CEPH_CONF_FILE} osd pool set ${CEPHFS_DATA_POOL} size ${CEPH_REPLICAS}
+    sudo ceph -c ${CEPH_CONF_FILE} osd pool set ${CEPHFS_METADATA_POOL} size ${CEPH_REPLICAS}
+    if [[ $CEPH_REPLICAS -ne 1 ]]; then
+        sudo ceph -c ${CEPH_CONF_FILE} osd pool set ${CEPHFS_DATA_POOL} crush_ruleset ${RULE_ID}
+        sudo ceph -c ${CEPH_CONF_FILE} osd pool set ${CEPHFS_METADATA_POOL} crush_ruleset ${RULE_ID}
+    fi
 }
 
 # init_ceph() - Initialize databases, etc.

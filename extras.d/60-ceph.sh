@@ -32,6 +32,10 @@ if is_service_enabled ceph; then
             echo_summary "Configuring Cinder for Ceph"
             configure_ceph_cinder
         fi
+        if is_service_enabled manila; then
+            echo_summary "Configuring Manila for Ceph"
+            configure_ceph_manila
+        fi
         if is_service_enabled cinder || is_service_enabled nova; then
             # NOTE (leseb): the part below is a requirement to attach Ceph block devices
             echo_summary "Configuring libvirt secret"
@@ -50,6 +54,10 @@ if is_service_enabled ceph; then
             if is_service_enabled cinder; then
                 echo_summary "Configuring Cinder for Ceph"
                 configure_ceph_embedded_cinder
+            fi
+            if is_service_enabled manila; then
+                echo_summary "Configuring Manila for Ceph"
+                configure_ceph_embedded_manila
             fi
         fi
     fi
